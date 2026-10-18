@@ -1,4 +1,4 @@
-package com.wristlink.app
+package com.pebbllink.app
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice

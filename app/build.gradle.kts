@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.wristlink.app"
+    namespace = "com.pebbllink.app"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.wristlink.app"
+        applicationId = "com.pebbllink.app"
         minSdk = 30
         targetSdk = 36
         versionCode = 1

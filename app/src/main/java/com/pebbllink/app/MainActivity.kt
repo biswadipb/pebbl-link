@@ -1,4 +1,4 @@
-package com.wristlink.app
+package com.pebbllink.app
 
 import android.Manifest
 import android.os.Build
@@ -43,7 +43,7 @@ class MainActivity : ComponentActivity() {
         link = WatchLink(this)
         setContent {
             MaterialTheme {
-                Surface(Modifier.fillMaxSize()) { WristlinkScreen(link) }
+                Surface(Modifier.fillMaxSize()) { PebblLinkScreen(link) }
             }
         }
     }
@@ -63,7 +63,7 @@ private val permissions: Array<String> =
     }
 
 @Composable
-private fun WristlinkScreen(link: WatchLink) {
+private fun PebblLinkScreen(link: WatchLink) {
     val ui by link.ui.collectAsState()
     var selected by remember { mutableStateOf<CharInfo?>(null) }
     var hex by remember { mutableStateOf("") }
@@ -72,7 +72,7 @@ private fun WristlinkScreen(link: WatchLink) {
     }
 
     Column(Modifier.statusBarsPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Wristlink", style = MaterialTheme.typography.headlineMedium)
+        Text("Pebbl Link", style = MaterialTheme.typography.headlineMedium)
         Text(
             when (ui.state) {
                 LinkState.Idle -> "Not connected"

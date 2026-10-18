@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Wristlink"
+rootProject.name = "pebbl-link"
 include(":app")
