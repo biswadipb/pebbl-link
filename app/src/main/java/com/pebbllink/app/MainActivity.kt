@@ -2,6 +2,9 @@ package com.pebbllink.app
 
 import android.Manifest
 import android.content.ClipData
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
@@ -75,7 +78,11 @@ private fun PebblLinkScreen(link: WatchLink) {
     // What to do once the permissions are granted: scan, or reconnect the saved watch.
     var afterPermission by remember { mutableStateOf({ link.startScan() }) }
     val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
-        if (granted.values.all { it }) afterPermission()
+        if (granted.values.all { it }) {
+            afterPermission()
+        } else {
+            link.note("Permission refused. Allow Nearby devices (Bluetooth) for Pebbl Link in Android settings, then scan again")
+        }
     }
 
     Column(Modifier.statusBarsPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -90,7 +97,12 @@ private fun PebblLinkScreen(link: WatchLink) {
             style = MaterialTheme.typography.bodyMedium,
         )
 
+        ui.log.lastOrNull()?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = {
+                context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
+            }) { Text("App settings") }
             if (ui.state == LinkState.Connected || ui.state == LinkState.Connecting) {
                 OutlinedButton(onClick = { link.disconnect() }) { Text("Disconnect") }
                 if (ui.state == LinkState.Connected) OutlinedButton(onClick = { link.pair() }) { Text("Pair") }
