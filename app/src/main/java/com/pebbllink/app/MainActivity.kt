@@ -1,6 +1,9 @@
 package com.pebbllink.app
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -31,6 +34,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,8 +71,11 @@ private fun PebblLinkScreen(link: WatchLink) {
     val ui by link.ui.collectAsState()
     var selected by remember { mutableStateOf<CharInfo?>(null) }
     var hex by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    // What to do once the permissions are granted: scan, or reconnect the saved watch.
+    var afterPermission by remember { mutableStateOf({ link.startScan() }) }
     val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
-        if (granted.values.all { it }) link.startScan()
+        if (granted.values.all { it }) afterPermission()
     }
 
     Column(Modifier.statusBarsPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -86,10 +93,15 @@ private fun PebblLinkScreen(link: WatchLink) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (ui.state == LinkState.Connected || ui.state == LinkState.Connecting) {
                 OutlinedButton(onClick = { link.disconnect() }) { Text("Disconnect") }
+                if (ui.state == LinkState.Connected) OutlinedButton(onClick = { link.pair() }) { Text("Pair") }
             } else if (ui.state == LinkState.Scanning) {
                 OutlinedButton(onClick = { link.stopScan() }) { Text("Stop scan") }
             } else {
-                Button(onClick = { askPermission.launch(permissions) }) { Text("Scan") }
+                Button(onClick = { afterPermission = { link.startScan() }; askPermission.launch(permissions) }) { Text("Scan") }
+                if (ui.savedAddress != null) {
+                    OutlinedButton(onClick = { afterPermission = { link.connectSaved() }; askPermission.launch(permissions) }) { Text("Reconnect") }
+                    TextButton(onClick = { link.forget() }) { Text("Forget") }
+                }
             }
         }
 
@@ -134,7 +146,14 @@ private fun PebblLinkScreen(link: WatchLink) {
             }
         }
 
-        Text("Log", style = MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Log", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp))
+            TextButton(onClick = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val chars = ui.characteristics.joinToString("\n") { "${it.service} / ${it.uuid}  R=${it.canRead} W=${it.canWrite} N=${it.canNotify}" }
+                clipboard.setPrimaryClip(ClipData.newPlainText("Pebbl Link log", chars + "\n\n" + ui.log.joinToString("\n")))
+            }) { Text("Copy") }
+        }
         LazyColumn(Modifier.weight(1f), reverseLayout = true) {
             items(ui.log.asReversed()) { line ->
                 Text(line, fontFamily = FontFamily.Monospace, fontSize = 11.sp)

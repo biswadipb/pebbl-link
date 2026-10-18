@@ -11,6 +11,9 @@ import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Context
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -35,6 +38,8 @@ data class LinkUi(
     val devices: List<FoundDevice> = emptyList(),
     val characteristics: List<CharInfo> = emptyList(),
     val log: List<String> = emptyList(),
+    /** The watch used last time, so it can be reconnected without scanning. */
+    val savedAddress: String? = null,
 )
 
 /**
@@ -46,8 +51,12 @@ class WatchLink(context: Context) {
     private val appContext = context.applicationContext
     private val adapter = appContext.getSystemService(BluetoothManager::class.java)?.adapter
     private var gatt: BluetoothGatt? = null
+    private val prefs = appContext.getSharedPreferences("watch", Context.MODE_PRIVATE)
+    private val handler = Handler(Looper.getMainLooper())
+    private var wantConnected = false
+    private var retries = 0
 
-    private val _ui = MutableStateFlow(LinkUi())
+    private val _ui = MutableStateFlow(LinkUi(savedAddress = prefs.getString("address", null)))
     val ui: StateFlow<LinkUi> = _ui
 
     val bluetoothOn: Boolean get() = adapter?.isEnabled == true
@@ -80,6 +89,18 @@ class WatchLink(context: Context) {
 
     fun connect(address: String) {
         stopScan()
+        wantConnected = true
+        retries = 0
+        prefs.edit().putString("address", address).apply()
+        _ui.update { it.copy(savedAddress = address) }
+        open(address)
+    }
+
+    fun connectSaved() {
+        _ui.value.savedAddress?.let { connect(it) }
+    }
+
+    private fun open(address: String) {
         val device = adapter?.getRemoteDevice(address) ?: return
         _ui.update { it.copy(state = LinkState.Connecting, characteristics = emptyList()) }
         log("Connecting to $address")
@@ -87,7 +108,22 @@ class WatchLink(context: Context) {
     }
 
     fun disconnect() {
+        wantConnected = false
+        handler.removeCallbacksAndMessages(null)
         gatt?.disconnect()
+    }
+
+    /** Forgets the saved watch, for when you want to pair a different one. */
+    fun forget() {
+        disconnect()
+        prefs.edit().remove("address").apply()
+        _ui.update { it.copy(savedAddress = null) }
+    }
+
+    /** Asks Android to bond with the watch. Some watches ignore commands until they are bonded. */
+    fun pair() {
+        val device = gatt?.device ?: return
+        log(if (device.createBond()) "Pairing requested" else "Pairing request failed")
     }
 
     /** Turns on notifications for a characteristic so replies from the watch show in the log. */
@@ -101,7 +137,14 @@ class WatchLink(context: Context) {
         } else {
             BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
         }
-        g.writeDescriptor(cccd, value)
+        if (Build.VERSION.SDK_INT >= 33) {
+            g.writeDescriptor(cccd, value)
+        } else {
+            @Suppress("DEPRECATION")
+            cccd.value = value
+            @Suppress("DEPRECATION")
+            g.writeDescriptor(cccd)
+        }
         log("Subscribing to ${info.uuid.short()}")
     }
 
@@ -110,7 +153,16 @@ class WatchLink(context: Context) {
         val ch = g.getService(info.service)?.getCharacteristic(info.uuid) ?: return
         val noResponse = ch.properties and BluetoothGattCharacteristic.PROPERTY_WRITE == 0
         val type = if (noResponse) BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE else BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        g.writeCharacteristic(ch, bytes, type)
+        if (Build.VERSION.SDK_INT >= 33) {
+            g.writeCharacteristic(ch, bytes, type)
+        } else {
+            @Suppress("DEPRECATION")
+            ch.writeType = type
+            @Suppress("DEPRECATION")
+            ch.value = bytes
+            @Suppress("DEPRECATION")
+            g.writeCharacteristic(ch)
+        }
         log("TX ${info.uuid.short()}  ${bytes.toHex()}")
     }
 
@@ -129,6 +181,7 @@ class WatchLink(context: Context) {
                 g.close()
                 if (gatt === g) gatt = null
                 _ui.update { it.copy(state = LinkState.Idle, characteristics = emptyList()) }
+                retryLater(g.device.address)
             }
         }
 
@@ -144,6 +197,7 @@ class WatchLink(context: Context) {
                     )
                 }
             }
+            retries = 0
             log("Found ${chars.size} characteristics")
             _ui.update { it.copy(state = LinkState.Connected, characteristics = chars) }
         }
@@ -155,6 +209,25 @@ class WatchLink(context: Context) {
         override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
             log("READ ${c.uuid.short()}  ${value.toHex()}")
         }
+
+        // Android 11 and 12 call these older versions instead of the ones above.
+        @Deprecated("Used below Android 13")
+        override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
+            if (Build.VERSION.SDK_INT < 33) log("RX ${c.uuid.short()}  ${c.value?.toHex().orEmpty()}")
+        }
+
+        @Deprecated("Used below Android 13")
+        override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
+            if (Build.VERSION.SDK_INT < 33) log("READ ${c.uuid.short()}  ${c.value?.toHex().orEmpty()}")
+        }
+    }
+
+    /** Tries again a few times when the watch drops out, for example when it goes out of range. */
+    private fun retryLater(address: String) {
+        if (!wantConnected || retries >= MAX_RETRIES) return
+        retries++
+        log("Retrying in ${RETRY_DELAY_MS / 1000}s (attempt $retries of $MAX_RETRIES)")
+        handler.postDelayed({ if (wantConnected && gatt == null) open(address) }, RETRY_DELAY_MS)
     }
 
     private fun log(line: String) {
@@ -162,6 +235,8 @@ class WatchLink(context: Context) {
     }
 
     companion object {
+        private const val MAX_RETRIES = 5
+        private const val RETRY_DELAY_MS = 3000L
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     }
 }
